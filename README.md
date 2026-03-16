@@ -1,6 +1,6 @@
 # gh-llm
 
-Local-first GitHub repository browsing tool for LLMs. Inspired by [github-llm](https://github.com/rien7/github-llm).
+Local-first GitHub repository browsing tool for Agents. Inspired by [github-llm](https://github.com/rien7/github-llm).
 
 ## Why Local-First?
 
@@ -17,7 +17,7 @@ Unlike the Cloudflare Worker version (`github-llm`), this tool runs locally on y
 ### From source
 
 ```bash
-git clone https://github.com/rien7/gh-llm
+git clone https://github.com/tizee/gh-llm
 cd gh-llm
 uv sync
 ```
