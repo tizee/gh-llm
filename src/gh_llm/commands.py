@@ -1,5 +1,6 @@
 """CLI commands for gh-llm."""
 
+import sys
 import json
 import asyncio
 import subprocess
@@ -7,8 +8,6 @@ from contextlib import contextmanager
 from collections.abc import Iterator
 
 import typer
-import rich.table
-import rich.console
 
 from gh_llm import config
 from gh_llm.github import (
@@ -20,13 +19,17 @@ from gh_llm.github import (
 )
 
 app = typer.Typer(help='gh-llm: Local-first GitHub repository browsing tool for LLMs')
-console = rich.console.Console()
+
+
+def _err(msg: str) -> None:
+    """Print error message to stderr."""
+    print(f'Error: {msg}', file=sys.stderr)
 
 
 def require_token() -> None:
     """Ensure a token is configured, or exit with an error."""
     if not config.has_token():
-        console.print("[red]Error: No token configured.[/red] Run 'gh-llm setup' first.")
+        _err("No token configured. Run 'gh-llm setup' first.")
         raise typer.Exit(1)
 
 
@@ -36,19 +39,52 @@ def handle_github_errors(resource_desc: str) -> Iterator[None]:
     try:
         yield
     except NotFoundError:
-        console.print(f'[red]Error: {resource_desc} not found[/red]')
+        _err(f'{resource_desc} not found')
         raise typer.Exit(1)
     except RateLimitError as e:
-        console.print(f'[red]Error: {e}[/red]')
-        console.print("[yellow]Run 'gh-llm setup' to configure a token.[/yellow]")
+        _err(str(e))
+        print("Run 'gh-llm setup' to configure a token.", file=sys.stderr)
         raise typer.Exit(1)
     except AuthenticationError as e:
-        console.print(f'[red]Error: {e}[/red]')
-        console.print("[yellow]Run 'gh-llm setup' to reconfigure your token.[/yellow]")
+        _err(str(e))
+        print("Run 'gh-llm setup' to reconfigure your token.", file=sys.stderr)
         raise typer.Exit(1)
     except GitHubError as e:
-        console.print(f'[red]Error: {e}[/red]')
+        _err(str(e))
         raise typer.Exit(1)
+
+
+def parse_repo_and_path(input_str: str) -> tuple[str, str, str]:
+    """Parse a combined 'owner/repo/path...' string into (owner, repo, path).
+
+    Accepts:
+        - 'owner/repo'
+        - 'owner/repo/path/to/file'
+        - 'https://github.com/owner/repo/path/to/file'
+
+    Returns:
+        Tuple of (owner, repo_name, path) where path may be empty.
+
+    Raises:
+        ValueError: If the string cannot be parsed.
+    """
+    # Strip full GitHub URL prefix
+    for prefix in ('https://github.com/', 'http://github.com/'):
+        if input_str.startswith(prefix):
+            input_str = input_str[len(prefix) :]
+            break
+
+    # Remove trailing slash
+    input_str = input_str.strip('/')
+
+    parts = input_str.split('/')
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise ValueError("Repository must be in format 'owner/repo' or 'owner/repo/path'")
+
+    owner = parts[0]
+    repo_name = parts[1]
+    path = '/'.join(parts[2:])
+    return owner, repo_name, path
 
 
 def parse_repo(repo: str) -> tuple[str, str]:
@@ -65,7 +101,7 @@ def parse_repo(repo: str) -> tuple[str, str]:
     # Strip full GitHub URL prefix
     for prefix in ('https://github.com/', 'http://github.com/'):
         if repo.startswith(prefix):
-            repo = repo[len(prefix):]
+            repo = repo[len(prefix) :]
             break
 
     # Remove trailing slash
@@ -114,7 +150,7 @@ def setup(
     """
     # Check if token already exists
     if config.has_token() and not force:
-        console.print('[yellow]Token already configured.[/yellow] Use --force to overwrite.')
+        _err('Token already configured. Use --force to overwrite.')
         raise typer.Exit(1)
 
     # Try to get token from gh CLI if not provided
@@ -127,39 +163,39 @@ def setup(
                 check=True,
             )
             token = result.stdout.strip()
-            console.print("[dim]Retrieved token from 'gh auth token'[/dim]")
+            print("Retrieved token from 'gh auth token'", file=sys.stderr)
         except FileNotFoundError:
-            console.print(
-                '[yellow]gh CLI not found.[/yellow] Please provide a token manually with --token.'
-            )
+            _err('gh CLI not found. Please provide a token manually with --token.')
             raise typer.Exit(1)
         except subprocess.CalledProcessError:
-            console.print(
-                "[red]Failed to get token from 'gh auth token'.[/red] "
+            _err(
+                "Failed to get token from 'gh auth token'. "
                 'Please provide a token manually with --token.'
             )
             raise typer.Exit(1)
 
     if not token:
-        console.print('[red]No token provided.[/red]')
+        _err('No token provided.')
         raise typer.Exit(1)
 
     # Validate token format (basic check)
     if len(token) < 10:
-        console.print('[red]Token appears to be invalid (too short).[/red]')
+        _err('Token appears to be invalid (too short).')
         raise typer.Exit(1)
 
     # Save the token
     config.save_token(token)
-    console.print('[green]Token saved successfully![/green]')
-    console.print(f'[dim]Stored in: {config.get_token_path()}[/dim]')
+    print('Token saved successfully.')
+    print(f'Stored in: {config.get_token_path()}')
 
 
 @app.command('ls')
 @app.command('tree')
 def list_directory(
-    repo: str = typer.Argument(..., help="Repository as 'owner/repo' or full GitHub URL"),
-    path: str = typer.Argument('', help='Path within the repository'),
+    repo: str = typer.Argument(
+        ..., help="Repository with optional path: 'owner/repo[/path]' or full GitHub URL"
+    ),
+    path: str = typer.Argument('', help='Path within the repository (optional)'),
     ref: str = typer.Option(
         None,
         '--ref',
@@ -176,23 +212,24 @@ def list_directory(
 
     Examples:
         gh-llm ls octocat/Hello-World
-        gh-llm ls octocat/Hello-World --ref main
+        gh-llm ls octocat/Hello-World/src
         gh-llm ls octocat/Hello-World src
+        gh-llm ls octocat/Hello-World --ref main
     """
     try:
-        owner, repo_name = parse_repo(repo)
+        owner, repo_name, parsed_path = parse_repo_and_path(repo)
     except ValueError:
-        console.print(
-            "[red]Error: Repository must be in format 'owner/repo'"
-            " or a full GitHub URL[/red]"
-        )
+        _err("Repository must be in format 'owner/repo' or 'owner/repo/path'")
         raise typer.Exit(1)
+
+    # Explicit path arg takes precedence; otherwise use path embedded in repo arg
+    effective_path = path if path else parsed_path
 
     require_token()
     client = get_client()
 
-    with handle_github_errors(f"Path '{path}' in {repo}"):
-        entries = asyncio.run(client.get_repo_contents(owner, repo_name, path, ref))
+    with handle_github_errors(f"Path '{effective_path}' in {owner}/{repo_name}"):
+        entries = asyncio.run(client.get_repo_contents(owner, repo_name, effective_path, ref))
 
     if json_output:
         output = [
@@ -213,27 +250,18 @@ def list_directory(
         key=lambda e: (e.type != 'dir', e.name.lower()),
     )
 
-    # Display as table
-    table = rich.table.Table(
-        show_header=True,
-        header_style='bold',
-    )
-    table.add_column('Type', style='cyan', width=4)
-    table.add_column('Name')
-    table.add_column('Size', justify='right')
-
     for entry in sorted_entries:
         entry_type = 'dir' if entry.type == 'dir' else 'file'
-        size_str = '-' if entry.size is None else _format_size(entry.size)
-        table.add_row(entry_type, entry.name, size_str)
-
-    console.print(table)
+        size_str = '' if entry.size is None else f'\t{_format_size(entry.size)}'
+        print(f'{entry_type}\t{entry.name}{size_str}')
 
 
 @app.command('cat')
 def cat_file(
-    repo: str = typer.Argument(..., help="Repository as 'owner/repo' or full GitHub URL"),
-    path: str = typer.Argument(..., help='Path to the file'),
+    repo: str = typer.Argument(
+        ..., help="Repository with optional path: 'owner/repo[/path]' or full GitHub URL"
+    ),
+    path: str = typer.Argument('', help='Path to the file (can be included in repo arg)'),
     ref: str = typer.Option(
         None,
         '--ref',
@@ -244,23 +272,28 @@ def cat_file(
     """Display raw contents of a file from a GitHub repository.
 
     Examples:
+        gh-llm cat octocat/Hello-World/README.md
         gh-llm cat octocat/Hello-World README.md
-        gh-llm cat octocat/Hello-World src/main.py --ref main
+        gh-llm cat octocat/Hello-World/src/main.py --ref main
     """
     try:
-        owner, repo_name = parse_repo(repo)
+        owner, repo_name, parsed_path = parse_repo_and_path(repo)
     except ValueError:
-        console.print(
-            "[red]Error: Repository must be in format 'owner/repo'"
-            " or a full GitHub URL[/red]"
-        )
+        _err("Repository must be in format 'owner/repo' or 'owner/repo/path'")
+        raise typer.Exit(1)
+
+    # Explicit path arg takes precedence; otherwise use path embedded in repo arg
+    effective_path = path if path else parsed_path
+
+    if not effective_path:
+        _err('File path is required. Use: gh-llm cat owner/repo/path')
         raise typer.Exit(1)
 
     require_token()
     client = get_client()
 
-    with handle_github_errors(f"File '{path}' in {repo}"):
-        content = asyncio.run(client.get_file_content(owner, repo_name, path, ref))
+    with handle_github_errors(f"File '{effective_path}' in {owner}/{repo_name}"):
+        content = asyncio.run(client.get_file_content(owner, repo_name, effective_path, ref))
 
     print(content, end='')
 
@@ -269,11 +302,11 @@ def cat_file(
 def status() -> None:
     """Check the current configuration status."""
     if config.has_token():
-        console.print('[green]Token: Configured[/green]')
-        console.print(f'[dim]Location: {config.get_token_path()}[/dim]')
+        print('Token: Configured')
+        print(f'Location: {config.get_token_path()}')
     else:
-        console.print('[yellow]Token: Not configured[/yellow]')
-        console.print("[dim]Run 'gh-llm setup' to configure.[/dim]")
+        print('Token: Not configured')
+        print("Run 'gh-llm setup' to configure.")
 
 
 def _format_size(size: int) -> str:

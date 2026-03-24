@@ -11,7 +11,7 @@ sync: ## Sync Python dependencies
 	uv sync
 
 test: ## Run tests
-	uv run pytest tests/ -v
+	uv run python -m pytest tests/ -v
 
 fmt: ## Format code with ruff
 	uv run ruff format src/ tests/
@@ -20,7 +20,7 @@ lint: ## Lint code with ruff
 	uv run ruff check src/ tests/
 
 typecheck: ## Type check with pyright
-	uv run pyright src/ tests/
+	uv run python -m pyright src/ tests/
 
 dev: install test ## Setup dev environment and run tests
 

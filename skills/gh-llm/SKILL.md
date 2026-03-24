@@ -43,14 +43,16 @@ gh-llm setup --token ghp_xxxxx --force
 
 ## Repository Argument
 
-All browsing commands accept the repo in two formats:
+All browsing commands accept the repo with an optional path in a single argument:
 
 | Format | Example |
 |--------|---------|
 | `owner/repo` | `octocat/Hello-World` |
+| `owner/repo/path` | `octocat/Hello-World/src/main.py` |
 | Full GitHub URL | `https://github.com/octocat/Hello-World` |
+| Full URL with path | `https://github.com/octocat/Hello-World/src/main.py` |
 
-Both are equivalent. Use whichever is more convenient -- if the user provides a full URL, pass it directly.
+The path can also be passed as a separate second argument (backward compatible). Trailing slashes are stripped. `http://` URLs work too.
 
 ## Commands
 
@@ -60,7 +62,10 @@ Both are equivalent. Use whichever is more convenient -- if the user provides a 
 # List repo root
 gh-llm ls owner/repo
 
-# List a subdirectory
+# List a subdirectory (path in single arg)
+gh-llm ls owner/repo/src/components
+
+# List a subdirectory (path as separate arg)
 gh-llm ls owner/repo src/components
 
 # Specific branch/tag/commit
@@ -72,18 +77,27 @@ gh-llm ls owner/repo --json
 
 `tree` is an alias for `ls` -- they behave identically.
 
-Output is a table with Type (dir/file), Name, and Size columns. Directories are listed first, then files, both sorted alphabetically.
+Output is tab-separated plain text: `type\tname[\tsize]`. Directories are listed first, then files, both sorted alphabetically. Example:
 
-Use `--json` when you need to process the output programmatically. It outputs a JSON array of objects with `name`, `path`, `type`, and `size` fields, bypassing Rich formatting.
+```
+dir	src
+file	README.md	1.2KB
+file	setup.py	567B
+```
+
+Use `--json` when you need to process the output programmatically. It outputs a JSON array of objects with `name`, `path`, `type`, and `size` fields.
 
 ### Read file contents
 
 ```bash
-# Read a file
+# Read a file (single arg -- preferred)
+gh-llm cat owner/repo/README.md
+
+# Read a file (separate args)
 gh-llm cat owner/repo README.md
 
 # Read from a specific ref
-gh-llm cat owner/repo src/main.py --ref main
+gh-llm cat owner/repo/src/main.py --ref main
 ```
 
 Outputs raw file content to stdout with no formatting. Safe to pipe or redirect.
@@ -105,13 +119,15 @@ A typical exploration session looks like:
 gh-llm ls owner/repo
 
 # 2. Drill into a directory
-gh-llm ls owner/repo src
+gh-llm ls owner/repo/src
 
 # 3. Read a file of interest
-gh-llm cat owner/repo src/main.py
+gh-llm cat owner/repo/src/main.py
 ```
 
 ## Error Handling
+
+Errors are printed to stderr as plain text (no ANSI colors or markup).
 
 | Error | Meaning | Action |
 |-------|---------|--------|
@@ -124,4 +140,3 @@ gh-llm cat owner/repo src/main.py
 
 - For large repos, use `--json` and pipe through `jq` to filter results
 - The `cat` command handles large files that exceed GitHub's API content limit by following the download URL automatically
-- Color output is automatically disabled when piped to another command (Rich auto-detects non-TTY)

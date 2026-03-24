@@ -60,7 +60,6 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "platformdirs" },
-    { name = "rich" },
     { name = "typer" },
 ]
 
@@ -74,7 +73,6 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "platformdirs", specifier = ">=4.3.0" },
-    { name = "rich", specifier = ">=13.9.0" },
     { name = "typer", specifier = ">=0.15.0" },
 ]
 
