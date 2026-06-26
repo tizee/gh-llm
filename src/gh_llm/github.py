@@ -170,7 +170,7 @@ class GitHubClient:
 
             raise GitHubError('File content not available')
 
-    def _handle_response_errors(self, response: httpx.Response) -> None:
+    def _handle_response_errors(self, response: 'httpx.Response') -> None:
         """Handle API response errors.
 
         Raises:

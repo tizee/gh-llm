@@ -256,18 +256,20 @@ def list_directory(
         key=lambda e: (e.type != 'dir', e.name.lower()),
     )
 
-    # Build rows and compute size column width
-    rows: list[tuple[str, bool, str]] = []  # (size_str, is_dir, display_name)
+    # Build rows and compute column widths
+    rows: list[tuple[str, str, str]] = []  # (type_str, size_str, display_name)
     for entry in sorted_entries:
         is_dir = entry.type == 'dir'
+        type_str = 'dir' if is_dir else 'file'
         display_name = f'{entry.name}/' if is_dir else entry.name
         size_str = '-' if is_dir else _format_size(entry.size) if entry.size is not None else '-'
-        rows.append((size_str, is_dir, display_name))
+        rows.append((type_str, size_str, display_name))
 
-    max_size_w = max((len(r[0]) for r in rows), default=0)
+    max_type_w = max((len(r[0]) for r in rows), default=0)
+    max_size_w = max((len(r[1]) for r in rows), default=0)
 
-    for size_str, _is_dir, display_name in rows:
-        print(f'{size_str:>{max_size_w}}  {display_name}')
+    for type_str, size_str, display_name in rows:
+        print(f'{type_str:<{max_type_w}}  {size_str:>{max_size_w}}  {display_name}')
 
 
 @app.command('cat', no_args_is_help=True)
