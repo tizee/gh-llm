@@ -4,6 +4,7 @@ import sys
 import json
 import asyncio
 import subprocess
+from typing import NoReturn
 from contextlib import contextmanager
 from collections.abc import Iterator
 
@@ -18,40 +19,73 @@ from gh_llm.github import (
     AuthenticationError,
 )
 
-app = typer.Typer(help='gh-llm: Local-first GitHub repository browsing tool for LLMs')
+app = typer.Typer(
+    help='gh-llm: Local-first GitHub repository browsing tool for LLMs',
+    pretty_exceptions_enable=False,
+    rich_markup_mode=None,
+)
+
+# Exit codes for distinct failure modes
+EXIT_NOT_FOUND = 2
+EXIT_RATE_LIMIT = 3
+EXIT_AUTH = 4
+EXIT_NETWORK = 5
 
 
-def _err(msg: str) -> None:
-    """Print error message to stderr."""
-    print(f'Error: {msg}', file=sys.stderr)
+@app.callback(invoke_without_command=True, no_args_is_help=True)
+def _version_callback(  # pyright: ignore[reportUnusedFunction]
+    version: bool = typer.Option(
+        False,
+        '--version',
+        '-V',
+        help='Show version and exit.',
+    ),
+) -> None:
+    if version:
+        from gh_llm import __version__
+
+        print(f'gh-llm {__version__}')
+        raise typer.Exit()
+
+
+def _err(msg: str, exit_code: int = 1) -> NoReturn:
+    """Print error message to stderr and exit."""
+    _print_error(msg, exit_code=exit_code)
 
 
 def require_token() -> None:
     """Ensure a token is configured, or exit with an error."""
     if not config.has_token():
-        _err("No token configured. Run 'gh-llm setup' first.")
-        raise typer.Exit(1)
+        _err("No token configured. Run 'gh-llm setup' first.", EXIT_AUTH)
+
+
+def _print_error(msg: str, json_output: bool = False, error_code: str = '', exit_code: int = 1) -> NoReturn:
+    """Print error message and exit. Uses JSON format when json_output is True."""
+    if json_output:
+        error_obj: dict[str, str] = {'error': error_code, 'message': msg}
+        print(json.dumps(error_obj), file=sys.stderr)
+    else:
+        print(f'Error: {msg}', file=sys.stderr)
+    raise typer.Exit(exit_code)
 
 
 @contextmanager
-def handle_github_errors(resource_desc: str) -> Iterator[None]:
+def handle_github_errors(resource_desc: str, json_output: bool = False) -> Iterator[None]:
     """Catch GitHub API errors and print user-friendly messages."""
     try:
         yield
     except NotFoundError:
-        _err(f'{resource_desc} not found')
-        raise typer.Exit(1)
+        _print_error(f'{resource_desc} not found', json_output, 'not_found', EXIT_NOT_FOUND)
     except RateLimitError as e:
-        _err(str(e))
-        print("Run 'gh-llm setup' to configure a token.", file=sys.stderr)
-        raise typer.Exit(1)
+        _print_error(str(e), json_output, 'rate_limit', EXIT_RATE_LIMIT)
+        if not json_output:
+            print("Run 'gh-llm setup' to configure a token.", file=sys.stderr)
     except AuthenticationError as e:
-        _err(str(e))
-        print("Run 'gh-llm setup' to reconfigure your token.", file=sys.stderr)
-        raise typer.Exit(1)
+        _print_error(str(e), json_output, 'auth', EXIT_AUTH)
+        if not json_output:
+            print("Run 'gh-llm setup' to reconfigure your token.", file=sys.stderr)
     except GitHubError as e:
-        _err(str(e))
-        raise typer.Exit(1)
+        _print_error(str(e), json_output, 'github_error', 1)
 
 
 def parse_repo_and_path(input_str: str) -> tuple[str, str, str]:
@@ -85,32 +119,6 @@ def parse_repo_and_path(input_str: str) -> tuple[str, str, str]:
     repo_name = parts[1]
     path = '/'.join(parts[2:])
     return owner, repo_name, path
-
-
-def parse_repo(repo: str) -> tuple[str, str]:
-    """Parse a repo string into (owner, repo_name).
-
-    Accepts:
-        - 'owner/repo'
-        - 'https://github.com/owner/repo'
-        - 'http://github.com/owner/repo'
-
-    Raises:
-        ValueError: If the string cannot be parsed as owner/repo.
-    """
-    # Strip full GitHub URL prefix
-    for prefix in ('https://github.com/', 'http://github.com/'):
-        if repo.startswith(prefix):
-            repo = repo[len(prefix) :]
-            break
-
-    # Remove trailing slash
-    repo = repo.strip('/')
-
-    parts = repo.split('/')
-    if len(parts) != 2 or not parts[0] or not parts[1]:
-        raise ValueError("Repository must be in format 'owner/repo' or a full GitHub URL")
-    return parts[0], parts[1]
 
 
 def get_client() -> GitHubClient:
@@ -151,7 +159,6 @@ def setup(
     # Check if token already exists
     if config.has_token() and not force:
         _err('Token already configured. Use --force to overwrite.')
-        raise typer.Exit(1)
 
     # Try to get token from gh CLI if not provided
     if not token:
@@ -166,31 +173,27 @@ def setup(
             print("Retrieved token from 'gh auth token'", file=sys.stderr)
         except FileNotFoundError:
             _err('gh CLI not found. Please provide a token manually with --token.')
-            raise typer.Exit(1)
         except subprocess.CalledProcessError:
             _err(
                 "Failed to get token from 'gh auth token'. "
                 'Please provide a token manually with --token.'
             )
-            raise typer.Exit(1)
 
     if not token:
         _err('No token provided.')
-        raise typer.Exit(1)
 
     # Validate token format (basic check)
     if len(token) < 10:
         _err('Token appears to be invalid (too short).')
-        raise typer.Exit(1)
 
     # Save the token
     config.save_token(token)
-    print('Token saved successfully.')
-    print(f'Stored in: {config.get_token_path()}')
+    print('Token saved successfully.', file=sys.stderr)
+    print(f'Stored in: {config.get_token_path()}', file=sys.stderr)
 
 
-@app.command('ls')
-@app.command('tree')
+@app.command('ls', no_args_is_help=True)
+@app.command('tree', no_args_is_help=True)
 def list_directory(
     repo: str = typer.Argument(
         ..., help="Repository with optional path: 'owner/repo[/path]' or full GitHub URL"
@@ -219,8 +222,11 @@ def list_directory(
     try:
         owner, repo_name, parsed_path = parse_repo_and_path(repo)
     except ValueError:
-        _err("Repository must be in format 'owner/repo' or 'owner/repo/path'")
-        raise typer.Exit(1)
+        _print_error(
+            "Repository must be in format 'owner/repo' or 'owner/repo/path'",
+            json_output,
+            'invalid_input',
+        )
 
     # Explicit path arg takes precedence; otherwise use path embedded in repo arg
     effective_path = path if path else parsed_path
@@ -228,7 +234,7 @@ def list_directory(
     require_token()
     client = get_client()
 
-    with handle_github_errors(f"Path '{effective_path}' in {owner}/{repo_name}"):
+    with handle_github_errors(f"Path '{effective_path}' in {owner}/{repo_name}", json_output):
         entries = asyncio.run(client.get_repo_contents(owner, repo_name, effective_path, ref))
 
     if json_output:
@@ -244,19 +250,27 @@ def list_directory(
         print(json.dumps(output, indent=2))
         return
 
-    # Sort: directories first, then files
+    # Sort: directories first, then by name
     sorted_entries = sorted(
         entries,
         key=lambda e: (e.type != 'dir', e.name.lower()),
     )
 
+    # Build rows and compute size column width
+    rows: list[tuple[str, bool, str]] = []  # (size_str, is_dir, display_name)
     for entry in sorted_entries:
-        entry_type = 'dir' if entry.type == 'dir' else 'file'
-        size_str = '' if entry.size is None else f'\t{_format_size(entry.size)}'
-        print(f'{entry_type}\t{entry.name}{size_str}')
+        is_dir = entry.type == 'dir'
+        display_name = f'{entry.name}/' if is_dir else entry.name
+        size_str = '-' if is_dir else _format_size(entry.size) if entry.size is not None else '-'
+        rows.append((size_str, is_dir, display_name))
+
+    max_size_w = max((len(r[0]) for r in rows), default=0)
+
+    for size_str, _is_dir, display_name in rows:
+        print(f'{size_str:>{max_size_w}}  {display_name}')
 
 
-@app.command('cat')
+@app.command('cat', no_args_is_help=True)
 def cat_file(
     repo: str = typer.Argument(
         ..., help="Repository with optional path: 'owner/repo[/path]' or full GitHub URL"
@@ -267,6 +281,12 @@ def cat_file(
         '--ref',
         '-r',
         help='Git reference (branch, tag, or commit SHA)',
+    ),
+    lines: int = typer.Option(
+        0,
+        '--lines',
+        '-n',
+        help='Output only the first N lines (0 = all)',
     ),
 ) -> None:
     """Display raw contents of a file from a GitHub repository.
@@ -280,14 +300,12 @@ def cat_file(
         owner, repo_name, parsed_path = parse_repo_and_path(repo)
     except ValueError:
         _err("Repository must be in format 'owner/repo' or 'owner/repo/path'")
-        raise typer.Exit(1)
 
     # Explicit path arg takes precedence; otherwise use path embedded in repo arg
     effective_path = path if path else parsed_path
 
     if not effective_path:
         _err('File path is required. Use: gh-llm cat owner/repo/path')
-        raise typer.Exit(1)
 
     require_token()
     client = get_client()
@@ -295,12 +313,42 @@ def cat_file(
     with handle_github_errors(f"File '{effective_path}' in {owner}/{repo_name}"):
         content = asyncio.run(client.get_file_content(owner, repo_name, effective_path, ref))
 
+    if lines > 0:
+        content_lines = content.splitlines()
+        content = '\n'.join(content_lines[:lines])
+        if len(content_lines) > lines:
+            content += '\n'
+
     print(content, end='')
 
 
 @app.command()
-def status() -> None:
+def status(
+    json_output: bool = typer.Option(
+        False,
+        '--json',
+        help='Output as JSON for machine consumption',
+    ),
+) -> None:
     """Check the current configuration status."""
+    if json_output:
+        if config.has_token():
+            token = config.get_token()
+            masked = token[:4] + '****' if token and len(token) > 4 else 'none'
+            output = {
+                'configured': True,
+                'token_masked': masked,
+                'config_dir': str(config.get_config_dir()),
+            }
+        else:
+            output = {
+                'configured': False,
+                'token_masked': None,
+                'config_dir': str(config.get_config_dir()),
+            }
+        print(json.dumps(output, indent=2))
+        return
+
     if config.has_token():
         print('Token: Configured')
         print(f'Location: {config.get_token_path()}')

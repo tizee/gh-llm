@@ -1,7 +1,5 @@
 """GitHub API client for gh-llm."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any, cast
 from dataclasses import dataclass
 
@@ -15,14 +13,17 @@ GITHUB_API_HEADERS = {
     'User-Agent': 'gh-llm',
     'X-GitHub-Api-Version': '2022-11-28',
 }
+_httpx_timeout: 'httpx.Timeout | None' = None
 
 
-@dataclass
-class RepoRef:
-    """Represents a GitHub repository reference."""
+def _get_timeout() -> 'httpx.Timeout':
+    """Return the shared httpx timeout, creating it lazily."""
+    global _httpx_timeout
+    if _httpx_timeout is None:
+        import httpx
 
-    owner: str
-    name: str
+        _httpx_timeout = httpx.Timeout(30.0, connect=10.0)
+    return _httpx_timeout
 
 
 @dataclass
@@ -104,7 +105,7 @@ class GitHubClient:
         url = f'{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}'
         params = {'ref': ref} if ref else None
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_get_timeout()) as client:
             response = await client.get(
                 url,
                 headers=self._build_headers(),
@@ -117,18 +118,6 @@ class GitHubClient:
                 # Single file - return as a list with one entry
                 return [self._entry_from_dict(cast(dict[str, Any], data))]
             return [self._entry_from_dict(cast(dict[str, Any], item)) for item in data]
-
-    async def get_repo_root(self, owner: str, repo: str) -> list[GitHubEntry]:
-        """Get contents of the repository root.
-
-        Args:
-            owner: Repository owner.
-            repo: Repository name.
-
-        Returns:
-            List of entries at the repository root.
-        """
-        return await self.get_repo_contents(owner, repo, '')
 
     async def get_file_content(
         self,
@@ -155,7 +144,7 @@ class GitHubClient:
         url = f'{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}'
         params = {'ref': ref} if ref else None
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=_get_timeout()) as client:
             response = await client.get(
                 url,
                 headers=self._build_headers(),
@@ -164,6 +153,10 @@ class GitHubClient:
             self._handle_response_errors(response)
 
             data: Any = response.json()
+            if isinstance(data, list):
+                raise GitHubError(
+                    f"'{path}' is a directory, not a file. Use 'gh-llm ls' to list directory contents."
+                )
             if data.get('content'):
                 encoding = data.get('encoding', 'base64')
                 if encoding == 'base64':

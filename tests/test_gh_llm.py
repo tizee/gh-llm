@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from gh_llm import config
 from gh_llm.github import GitHubEntry
-from gh_llm.commands import app, parse_repo, parse_repo_and_path
+from gh_llm.commands import app, parse_repo_and_path
 
 
 def test_config_dir():
@@ -23,34 +23,6 @@ def test_token_path():
     token_path = config.get_token_path()
     assert token_path.name == 'token'
     assert token_path.parent.name == 'gh-llm'
-
-
-class TestParseRepo:
-    """Tests for parse_repo: supports owner/repo and full GitHub URLs."""
-
-    def test_owner_slash_repo(self):
-        assert parse_repo('rien7/github-llm') == ('rien7', 'github-llm')
-
-    def test_full_https_url(self):
-        assert parse_repo('https://github.com/rien7/github-llm') == ('rien7', 'github-llm')
-
-    def test_full_url_trailing_slash(self):
-        assert parse_repo('https://github.com/rien7/github-llm/') == ('rien7', 'github-llm')
-
-    def test_http_url(self):
-        assert parse_repo('http://github.com/rien7/github-llm') == ('rien7', 'github-llm')
-
-    def test_invalid_bare_name(self):
-        with pytest.raises(ValueError, match='owner/repo'):
-            parse_repo('just-a-name')
-
-    def test_invalid_url_missing_repo(self):
-        with pytest.raises(ValueError, match='owner/repo'):
-            parse_repo('https://github.com/rien7')
-
-    def test_empty_string(self):
-        with pytest.raises(ValueError, match='owner/repo'):
-            parse_repo('')
 
 
 class TestParseRepoAndPath:
@@ -123,10 +95,13 @@ class TestLsOutput:
         result = runner.invoke(app, ['ls', 'octocat/Hello-World'])
         assert result.exit_code == 0
         lines = result.output.strip().split('\n')
-        # dirs first, then files, each line is plain text
-        assert 'dir' in lines[0]
-        assert 'src' in lines[0]
-        assert 'file' in lines[1]
+        # dirs first (marked with trailing /, size '-'), then files by name
+        assert 'src/' in lines[0]
+        assert 'README.md' in lines[1]
+        assert 'setup.py' in lines[2]
+        # no ANSI escape codes or rich markup in plain text output
+        assert '\x1b' not in result.output
+        assert 'Error:' not in result.output
 
     @patch('gh_llm.commands.config.has_token', return_value=True)
     @patch('gh_llm.commands.config.get_token', return_value='fake-token')

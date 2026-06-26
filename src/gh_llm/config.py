@@ -1,5 +1,6 @@
 """Configuration management for gh-llm."""
 
+import os
 from pathlib import Path
 
 import platformdirs
@@ -18,9 +19,15 @@ def get_token_path() -> Path:
 def get_token() -> str | None:
     """Load the stored GitHub token.
 
+    Checks GH_LLM_TOKEN environment variable first, then falls back
+    to the token file in the config directory.
+
     Returns:
         The stored token, or None if not configured.
     """
+    env_token = os.environ.get('GH_LLM_TOKEN', '').strip()
+    if env_token:
+        return env_token
     token_path = get_token_path()
     if not token_path.exists():
         return None
@@ -53,5 +60,5 @@ def clear_token() -> None:
 
 
 def has_token() -> bool:
-    """Check if a valid token is configured."""
+    """Check if a valid token is configured (via env var or file)."""
     return bool(get_token())
